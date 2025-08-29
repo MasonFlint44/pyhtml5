@@ -1,10 +1,12 @@
 [project]
-name = "uv-devcontainer-template"
-version = "0.1.0"
-description = "Add your description here"
+name = "pyhtml5"
+version = "0.0.1"
+description = "A small library for generating HTML & CSS using Python syntax."
 readme = "README.md"
-requires-python = ">=3.11"
-dependencies = [
-    "glom==24.*",
-    "pytest==8.*",
+requires-python = ">=3.9"
+dependencies = []
+
+[dependency-groups]
+dev = [
+    "pytest>=8.3.5",
 ]
