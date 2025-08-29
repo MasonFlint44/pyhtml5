@@ -1,54 +1,64 @@
-# UV Devcontainer Template
+# pyhtml5
 
-This template is designed to streamline the setup of a Python development environment using the `uv` package manager on Debian Bookworm. It's equipped with a collection of tools and extensions specifically chosen to enhance the Python development workflow, from code writing to testing and deployment.
+A tiny Python library for writing **HTML** and **CSS** in code — with clear, full element names like `Division`, `Paragraph`, and `Button`. Render to a string in regular Python, or mount directly into the browser DOM when running under **PyScript**.
 
-## Features Overview
+---
 
-| Feature                 | Description                                                                                           |
-|-------------------------|-------------------------------------------------------------------------------------------------------|
-| **Operating System**    | Debian Bookworm, providing a stable foundation for development.                                       |
-| **Package Management**  | `uv`, a lightweight and efficient package and environment manager.                                    |
-| **Programming Language**| Python, ready for development right out of the box.                                                  |
-| **Version Control**     | Git integrated for robust version control.                                                           |
-| **VSCode Extensions**   | A curated list of VSCode extensions installed, including essentials for Python development.           |
-| **Testing Framework**   | Pytest configured to run tests from the `tests` directory, utilizing VSCode's test runner for ease of testing. |
+## Why use it?
 
-## Getting Started
+- **Readable structure**: `with Division(): Paragraph("Hello")`
+- **Works anywhere**: strings in CPython, live DOM in PyScript
+- **Built-in CSS**: `Stylesheet().rule(".card", padding="16px")`
 
-1. **Clone and Open**: Clone this repository and open it in VSCode. The project will prompt to reopen in a devcontainer.
-1. **Dev Environment Initialization**: The `uv sync` task can be run manually, preparing and updating your development environment.
-1. **Rename the Project Directory**: Rename the `/project` directory to match the name of your new project to get started. Update the project name in the pyproject.toml file as well.
+---
 
-## Managing Dependencies
+## Install
 
-- **Application Dependencies**: Defined in `pyproject.toml`. A frozen set of these dependencies is created and stored in `uv.lock` for reproducible deployments.
+```bash
+pip install pyhtml5
+```
 
-## Running Tests
+## Quick start
 
-Tests are run using VSCode's integrated test runner:
+### Build HTML (string)
 
-1. Navigate to the testing sidebar in VSCode.
-1. You'll see your tests listed there. Test can be run directly from the UI.
+```python
+from pyhtml5 import Division, Paragraph, Anchor, html_string
 
-## Running the Application
+with Division(class_="card") as root:
+    Paragraph("Hello from pyhtml5! ")
+    Anchor("Read more", href="https://example.com", target="_blank")
 
-VSCode's `launch.json` is configured to debug the currently open Python file, allowing you to run and debug any part of your project easily.
+print(html_string(root))
+```
 
-> Note: You may need to tweak `launch.json` for specific project requirements, such as adding arguments or setting environment variables.
+### Use in PyScript (mount to the DOM)
 
-### Quick Start
+```python
+from pyhtml5 import Division, Paragraph
 
-- Open `project/main.py` or any Python file you intend to run.
-- Use `F5` or the green play button in the "Run and Debug" sidebar to start debugging.
+with Division(class_="notice") as box:
+    Paragraph("Running inside PyScript!")
 
-## Deployment
+box.mount("#app")   # or just box.mount() to append to <body>
+```
 
-Deploy your application using the dependencies detailed in `uv.lock` to guarantee that your deployment mirrors the tested state of your application.
+### CSS in code
 
-## Contributing
+```python
+from pyhtml5 import Stylesheet, css_string
 
-We welcome contributions to improve the `uv-devcontainer-template`. Please follow the standard fork and pull request workflow. Make sure to add tests for new features and update the documentation as necessary.
+with Stylesheet() as css:
+    css.rule(":root", color_scheme="light dark")
+    css.rule(".card", padding="16px", border="1px solid #ddd", border_radius="12px")
+
+print(css_string(css))  # in PyScript, use css.mount() to inject a <style>
+```
+
+---
 
 ## License
 
-This project is licensed under the [MIT License](LICENSE.md).
+MIT License
+
+See [LICENSE](LICENSE) for details.
