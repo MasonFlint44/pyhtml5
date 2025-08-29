@@ -18,6 +18,8 @@ A tiny Python library for writing **HTML** and **CSS** in code — with clear, f
 pip install pyhtml5
 ```
 
+---
+
 ## Quick start
 
 ### Build HTML (string)
