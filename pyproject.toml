@@ -1,6 +1,6 @@
 [project]
 name = "pyhtml5"
-version = "0.0.3"
+version = "0.0.4"
 description = "A small library for generating HTML & CSS using Python syntax."
 readme = "README.md"
 requires-python = ">=3.9"
