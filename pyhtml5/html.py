@@ -5,7 +5,7 @@ html.py — HTML nodes, Element base class, and dynamic HTML5 element classes.
 from __future__ import annotations
 
 import html as _html
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any, Dict, List, Optional, Union
 
 from .utils import (
     HAS_JS,
@@ -134,7 +134,6 @@ RAW_TEXT_TAGS = {"script", "style"}
 
 class Element(Node):
     _tag: str = "div"
-    _void: bool = False
 
     def __init__(self, *children: Union[Node, str], **attrs):
         self.tag = getattr(self, "_tag", "div")
@@ -142,14 +141,23 @@ class Element(Node):
         self.attrs: Dict[str, str] = {}
         self.children: List[Node] = []
 
-        style = attrs.pop("style", None)
-        classes = attrs.pop("class_", None) or attrs.pop("class", None)
-
-        self.attrs.update(_normalize_attrs(attrs))
-        if classes:
-            self.add_class(classes)
-        if style:
-            self.set_style(style)
+        # Preserve attribute insertion order and apply boolean & class/style semantics.
+        for k, v in attrs.items():
+            if k in ("class_", "class"):
+                if v == "":
+                    # explicit clear
+                    self.attrs["class"] = ""
+                elif v is False or v is None:
+                    # explicit remove
+                    self.attrs.pop("class", None)
+                elif v:
+                    self.add_class(v)
+                # else (falsy but not ""/False/None) -> skip
+            elif k == "style":
+                if v is not None:
+                    self.set_style(v)
+            else:
+                self._apply_single_attr(k, v)
 
         parent = _BuildStacks.current_element_parent()
         if parent is not None:
@@ -166,11 +174,25 @@ class Element(Node):
         _BuildStacks.pop_element()
         return False
 
+    def __repr__(self) -> str:
+        cls = self.__class__.__name__
+        return f"<{cls} tag={self.tag!r} void={self.void} attrs={self.attrs!r} children={len(self.children)}>"
+
     def add(self, child: Union["Node", str, None]) -> Optional["Node"]:
         if child is None:
             return None
         if self.void:
             raise TypeError(f"<{self.tag}> is a void element and cannot have children.")
+
+        # For raw-text elements, only allow strings or Text nodes (no elements or comments).
+        if self.tag in RAW_TEXT_TAGS:
+            if isinstance(child, str):
+                child = Text(child)
+            if not isinstance(child, Text):
+                raise TypeError(
+                    f"<{self.tag}> only supports string/text content (no elements or comments)."
+                )
+
         if isinstance(child, str):
             child = Text(child)
         self.children.append(child)
@@ -179,14 +201,88 @@ class Element(Node):
     def __call__(self, *children: Union["Node", str], **attrs) -> "Element":
         for c in children:
             self.add(c)
-        if attrs:
-            self.attrs.update(_normalize_attrs(attrs))
+
+        # Handle attributes in user-defined order, with boolean/class/style semantics.
+        for k, v in attrs.items():
+            if k in ("class_", "class"):
+                if v == "":
+                    self.attrs["class"] = ""
+                elif v is False or v is None:
+                    self.attrs.pop("class", None)
+                elif v:
+                    self.add_class(v)
+            elif k == "style":
+                if v is not None:
+                    self.set_style(v)
+            else:
+                self._apply_single_attr(k, v)
         return self
 
     # --- attribute helpers ---
 
+    def _apply_single_attr(self, key: str, value: Any) -> None:
+        """
+        Normalize a single attribute (preserving order) and apply semantics:
+
+          * aria-* : True -> "true"; False/None -> remove; else -> str(value)
+          * data-* : True -> "true"; False/None -> remove; else -> _stringify(value)
+          * other  : True -> valueless(""); False/None -> remove; else -> normalized value
+
+        _normalize_attrs is used to resolve aliases and hyphenation before applying.
+        """
+        normalized = _normalize_attrs({key: value})
+        # We must consider the *original* Python value for boolean decisions,
+        # but apply them to the normalized key(s).
+        if any(k.startswith("aria-") for k in normalized.keys()):
+            for k in normalized.keys():
+                if not k.startswith("aria-"):
+                    continue
+                if value is True:
+                    self.attrs[k] = "true"
+                elif value is False or value is None:
+                    self.attrs.pop(k, None)
+                else:
+                    self.attrs[k] = str(value)
+            # If normalization produced non-aria keys too, fall through for them below.
+
+        if any(k.startswith("data-") for k in normalized.keys()):
+            for k in list(normalized.keys()):
+                if not k.startswith("data-"):
+                    continue
+                if value is True:
+                    self.attrs[k] = "true"
+                elif value is False or value is None:
+                    self.attrs.pop(k, None)
+                else:
+                    # Use original value for stringify so objects/numbers format nicely
+                    self.attrs[k] = _stringify(value)
+
+        # Handle all remaining normalized keys that aren't aria-/data-
+        for k, v in normalized.items():
+            if k.startswith("aria-") or k.startswith("data-"):
+                continue
+            if value is True:
+                self.attrs[k] = ""
+            elif value is False or value is None:
+                self.attrs.pop(k, None)
+            else:
+                self.attrs[k] = v
+
     def set_attr(self, **attrs) -> "Element":
-        self.attrs.update(_normalize_attrs(attrs))
+        # Respect insertion order and semantics for class_/style plus aria-/data-.
+        for k, v in attrs.items():
+            if k in ("class_", "class"):
+                if v == "":
+                    self.attrs["class"] = ""
+                elif v is False or v is None:
+                    self.attrs.pop("class", None)
+                elif v:
+                    self.add_class(v)
+            elif k == "style":
+                if v is not None:
+                    self.set_style(v)
+            else:
+                self._apply_single_attr(k, v)
         return self
 
     def add_class(self, *classes) -> "Element":
@@ -221,19 +317,23 @@ class Element(Node):
             self.attrs["style"] = existing.rstrip(";") + ";" + style_str
         elif style_str:
             self.attrs["style"] = style_str
+        elif style_str == "":  # allow clearing style
+            self.attrs["style"] = ""
         return self
 
     def style(self, **props) -> "Element":
         return self.set_style(props)
 
     def data(self, **ds) -> "Element":
+        # Route through _apply_single_attr so boolean and stringify semantics apply.
         for k, v in ds.items():
-            self.attrs[f"data-{_hyphenate(k)}"] = _stringify(v)
+            self._apply_single_attr(f"data-{_hyphenate(k)}", v)
         return self
 
     def aria(self, **props) -> "Element":
+        # Route through _apply_single_attr so ARIA boolean semantics apply.
         for k, v in props.items():
-            self.attrs[f"aria-{_hyphenate(k)}"] = _stringify(v)
+            self._apply_single_attr(f"aria-{_hyphenate(k)}", v)
         return self
 
     # --- serialization / DOM ---
@@ -242,6 +342,7 @@ class Element(Node):
         if not self.attrs:
             return ""
         parts = []
+        # Preserve insertion order of self.attrs
         for k, v in self.attrs.items():
             if (
                 v == ""
@@ -262,24 +363,30 @@ class Element(Node):
             return pad + open_tag
         if not self.children:
             return pad + open_tag + f"</{self.tag}>"
+
         in_raw = self.tag in RAW_TEXT_TAGS
+        if in_raw:
+            # Do not add any whitespace/indent/newlines inside raw-text elements
+            inner = "".join(ch.to_html(0, _in_raw_text=True) for ch in self.children)
+            return pad + open_tag + inner + f"</{self.tag}>"
+
         has_block = any(isinstance(ch, Element) and not ch.void for ch in self.children)
         if has_block:
             inner = []
             for ch in self.children:
                 if isinstance(ch, Element):
-                    inner.append("\n" + ch.to_html(indent + 1, _in_raw_text=in_raw))
+                    inner.append("\n" + ch.to_html(indent + 1, _in_raw_text=False))
                 else:
                     inner.append(
                         "\n"
                         + ("  " * (indent + 1))
-                        + ch.to_html(indent + 1, _in_raw_text=in_raw)
+                        + ch.to_html(indent + 1, _in_raw_text=False)
                     )
             inner_str = "".join(inner) + "\n" + pad
             return pad + open_tag + inner_str + f"</{self.tag}>"
         else:
             inner = "".join(
-                ch.to_html(indent, _in_raw_text=in_raw) for ch in self.children
+                ch.to_html(indent, _in_raw_text=False) for ch in self.children
             )
             return pad + open_tag + inner + f"</{self.tag}>"
 
@@ -305,134 +412,7 @@ class Element(Node):
         return el
 
 
-# ---- HTML5 tag mapping -> non-abbreviated class names -----------------------------
-
-_HTML5_TAGS = [
-    # Document metadata
-    "html",
-    "head",
-    "title",
-    "base",
-    "link",
-    "meta",
-    "style",
-    # Sections
-    "body",
-    "address",
-    "article",
-    "aside",
-    "footer",
-    "header",
-    "h1",
-    "h2",
-    "h3",
-    "h4",
-    "h5",
-    "h6",
-    "hgroup",
-    "main",
-    "nav",
-    "section",
-    # Grouping
-    "blockquote",
-    "dd",
-    "div",
-    "dl",
-    "dt",
-    "figcaption",
-    "figure",
-    "hr",
-    "li",
-    "menu",
-    "ol",
-    "p",
-    "pre",
-    "ul",
-    # Text-level
-    "a",
-    "abbr",
-    "b",
-    "bdi",
-    "bdo",
-    "br",
-    "cite",
-    "code",
-    "data",
-    "dfn",
-    "em",
-    "i",
-    "kbd",
-    "mark",
-    "q",
-    "rp",
-    "rt",
-    "ruby",
-    "s",
-    "samp",
-    "small",
-    "span",
-    "strong",
-    "sub",
-    "sup",
-    "time",
-    "u",
-    "var",
-    "wbr",
-    # Edits
-    "del",
-    "ins",
-    # Embedded
-    "area",
-    "audio",
-    "img",
-    "map",
-    "track",
-    "video",
-    "embed",
-    "iframe",
-    "object",
-    "param",
-    "picture",
-    "source",
-    # Scripting
-    "canvas",
-    "noscript",
-    "script",
-    "slot",
-    "template",
-    # Table
-    "caption",
-    "col",
-    "colgroup",
-    "table",
-    "tbody",
-    "td",
-    "tfoot",
-    "th",
-    "thead",
-    "tr",
-    # Forms
-    "button",
-    "datalist",
-    "fieldset",
-    "form",
-    "input",
-    "label",
-    "legend",
-    "meter",
-    "optgroup",
-    "option",
-    "output",
-    "progress",
-    "select",
-    "textarea",
-    # Interactive
-    "details",
-    "dialog",
-    "summary",
-    # Non-standard but handy
-    "portal",
-]
+# ---- HTML5 Tag -> Class mapping ---------------------------------------------------
 
 TAG_TO_CLASSNAME: Dict[str, str] = {
     # Document metadata
@@ -557,13 +537,9 @@ TAG_TO_CLASSNAME: Dict[str, str] = {
     "details": "Details",
     "dialog": "Dialog",
     "summary": "Summary",
-    # Non-standard
+    # Non-standard (optional convenience)
     "portal": "Portal",
 }
-
-_missing = [t for t in _HTML5_TAGS if t not in TAG_TO_CLASSNAME]
-if _missing:
-    raise RuntimeError(f"TAG_TO_CLASSNAME missing entries: {_missing}")
 
 CLASSNAME_TO_TAG: Dict[str, str] = {v: k for k, v in TAG_TO_CLASSNAME.items()}
 TAG_TO_CLASS: Dict[str, type] = {}
@@ -572,14 +548,15 @@ CLASSNAME_TO_CLASS: Dict[str, type] = {}
 
 def rebuild_html_classes(overrides: Optional[Dict[str, str]] = None) -> None:
     """
-    Rebuild the HTML element classes from TAG_TO_CLASSNAME.
-    Optionally pass `overrides` to adjust names on the fly:
-        rebuild_html_classes({"hr": "HorizontalRuleLine"})
+    Rebuild the HTML element classes from TAG_TO_CLASSNAME, optionally using
+    non-mutating overrides for this rebuild call.
     """
-    global TAG_TO_CLASSNAME, CLASSNAME_TO_TAG, TAG_TO_CLASS, CLASSNAME_TO_CLASS
+    global CLASSNAME_TO_TAG, TAG_TO_CLASS, CLASSNAME_TO_CLASS
+
+    # Build an effective mapping without mutating the canonical base mapping.
+    effective: Dict[str, str] = dict(TAG_TO_CLASSNAME)
     if overrides:
-        TAG_TO_CLASSNAME = {**TAG_TO_CLASSNAME, **overrides}
-        CLASSNAME_TO_TAG = {v: k for k, v in TAG_TO_CLASSNAME.items()}
+        effective.update(overrides)
 
     # remove previous generated classes from this module's globals
     for name in list(CLASSNAME_TO_CLASS.keys()):
@@ -592,11 +569,14 @@ def rebuild_html_classes(overrides: Optional[Dict[str, str]] = None) -> None:
     TAG_TO_CLASS.clear()
     CLASSNAME_TO_CLASS.clear()
 
-    for tag, class_name in TAG_TO_CLASSNAME.items():
+    for tag, class_name in effective.items():
         cls = type(class_name, (Element,), {"_tag": tag})
         globals()[class_name] = cls
         TAG_TO_CLASS[tag] = cls
         CLASSNAME_TO_CLASS[class_name] = cls
+
+    # Update reverse mapping to reflect effective mapping.
+    CLASSNAME_TO_TAG = {v: k for k, v in effective.items()}
 
 
 def element_class_for_tag(tag: str) -> type:
